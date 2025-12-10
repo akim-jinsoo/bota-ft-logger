@@ -322,13 +322,41 @@ class BotaSerialSensorError(Exception):
         self.message = message
 
 
+def _default_port():
+    """Choose a reasonable default port per platform.
+
+    - Windows: keep using ``COM9`` so existing usage still works.
+    - Linux/macOS: default to ``/dev/ttyACM0`` which is a common
+      name for USB/serial Bota interfaces. You can always override
+      this on the command line.
+    """
+    system = platform.system().lower()
+    if system.startswith("win"):
+        return "COM9"
+    # Typical USB serial device names on Linux/macOS. The exact
+    # value can be overridden via the positional ``port`` argument.
+    return "/dev/ttyUSB0"
+
+
 def _parse_args(argv):
     parser = argparse.ArgumentParser(description="Read Bota Serial sensor and log to CSV.")
-    parser.add_argument("port", nargs="?", default="COM9",
-                        help='Serial port (e.g., COM9 or \\\\.\\COM10 on Windows). Defaults to COM9.')
+    parser.add_argument(
+        "port",
+        nargs="?",
+        default=_default_port(),
+        help=(
+            "Serial port, e.g. COM9 or \\ \\.\\COM10 on Windows, "
+            "/dev/ttyACM0 or /dev/ttyUSB0 on Linux. "
+            "Defaults to a platform-appropriate value."
+        ),
+    )
     parser.add_argument("--outfile", help="CSV output file path (default: timestamped in CWD)", default=None)
-    parser.add_argument("--baud", type=int, default=BotaSerialSensor.DEFAULT_BAUDERATE,
-                        help=f"Serial baud rate (default: {BotaSerialSensor.DEFAULT_BAUDERATE})")
+    parser.add_argument(
+        "--baud",
+        type=int,
+        default=BotaSerialSensor.DEFAULT_BAUDERATE,
+        help=f"Serial baud rate (default: {BotaSerialSensor.DEFAULT_BAUDERATE})",
+    )
     return parser.parse_args(argv)
 
 
