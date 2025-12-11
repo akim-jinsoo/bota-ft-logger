@@ -41,7 +41,7 @@ class BotaSerialSensor:
     DATA_FORMAT = 0         # 0: binary, 1: CSV  (we keep binary and unpack)
     BAUDERATE_CONFIG = 4    # 0: 9600, 1: 57600, 2: 115200, 3: 230400, 4: 460800
     FRAME_HEADER = b'\xAA'
-    time_step = 0.005       # updated after config
+    time_step = 0.00125       # updated after config
 
     def __init__(self, port, baud=None, outfile_path=None):
         self._port = self._normalize_port_name(port)
