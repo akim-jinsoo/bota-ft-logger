@@ -82,6 +82,28 @@ import matplotlib.pyplot as plt
 FORCE_COLUMNS = ["Fx", "Fy", "Fz"]
 TORQUE_COLUMNS = ["Mx", "My", "Mz"]
 
+# Universal Color Palette (Flat UI Extended)
+COLOR_PALETTE = [
+    "#F73535",  # Red
+    "#3498DB",  # Blue
+    "#2ECC71",  # Green
+    "#F79235",  # Orange
+    "#9B59B6",  # Purple
+    "#1ABC9C",  # Cyan
+    "#E91E63",  # Magenta
+    "#FDD01D",  # Yellow
+    "#16A085",  # Dark Teal
+    "#8E44AD",  # Dark Purple
+    "#D35400",  # Pumpkin
+    "#7F8C8D",  # Gray
+]
+
+# Plot Customization Overrides
+PLOT_TITLE = None
+X_AXIS_LABEL = None
+Y_AXIS_LABEL = None
+LEGEND_LABELS = None
+
 # Alignment onset detection thresholds (adjust these for noisy data)
 ONSET_NOISE_MULTIPLIER = 17.0  # Derivative must exceed this × noise floor
 ONSET_MIN_FRACTION = 0.3    # Or this fraction of max derivative, whichever is larger
@@ -221,6 +243,36 @@ def clip_data(t: list[float], data: dict[str, list[float]], t_start: float, t_en
     return t_clipped, data_clipped
 
 
+def clip_data_preserve_time(
+    t: list[float],
+    data: dict[str, list[float]],
+    t_start: float,
+    t_end: float,
+):
+    """Clip data to a time range WITHOUT resetting time to 0.
+
+    Args:
+        t: Time array
+        data: Dictionary of signal arrays (same length as t)
+        t_start: Start time (inclusive)
+        t_end: End time (inclusive)
+
+    Returns:
+        Tuple of (clipped_time, clipped_data) - time values are preserved
+    """
+    t_arr = np.array(t)
+    mask = (t_arr >= t_start) & (t_arr <= t_end)
+    indices = np.where(mask)[0]
+
+    if len(indices) == 0:
+        raise ValueError(f"No data found in time range [{t_start}, {t_end}]")
+
+    t_clipped = [t[i] for i in indices]
+    data_clipped = {name: [values[i] for i in indices] for name, values in data.items()}
+
+    return t_clipped, data_clipped
+
+
 def clip_around_peak(
     t: list[float],
     data: dict[str, list[float]],
@@ -270,27 +322,35 @@ def clip_around_peak(
 def plot_force_torque(t, forces, torques, title: str | None = None, smooth_window: int | None = None):
     fig, (ax_f, ax_m) = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
 
-    for name in FORCE_COLUMNS:
-        ax_f.plot(t, forces[name], label=name)
+    # Use palette colors sequentially for channels
+    # Fx, Fy, Fz -> Colors 0, 1, 2
+    for i, name in enumerate(FORCE_COLUMNS):
+        color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
+        ax_f.plot(t, forces[name], label=name, color=color)
+    
     ylabel_f = "Force [N] (normalized)"
     if smooth_window and smooth_window > 1:
         ylabel_f += f" [smoothed, window={smooth_window}]"
-    ax_f.set_ylabel(ylabel_f)
+    ax_f.set_ylabel(Y_AXIS_LABEL if Y_AXIS_LABEL else ylabel_f)
     ax_f.grid(True, linestyle="--", alpha=0.3)
     ax_f.legend(loc="best")
 
-    for name in TORQUE_COLUMNS:
-        ax_m.plot(t, torques[name], label=name)
+    # Mx, My, Mz -> Colors 0, 1, 2 (reuse sequence)
+    for i, name in enumerate(TORQUE_COLUMNS):
+        color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
+        ax_m.plot(t, torques[name], label=name, color=color)
+        
     ylabel_m = "Torque [Nm] (normalized)"
     if smooth_window and smooth_window > 1:
         ylabel_m += f" [smoothed, window={smooth_window}]"
-    ax_m.set_ylabel(ylabel_m)
-    ax_m.set_xlabel("Time [s]")
+    ax_m.set_ylabel(Y_AXIS_LABEL if Y_AXIS_LABEL else ylabel_m)
+    ax_m.set_xlabel(X_AXIS_LABEL if X_AXIS_LABEL else "Time [s]")
     ax_m.grid(True, linestyle="--", alpha=0.3)
     ax_m.legend(loc="best")
 
-    if title:
-        fig.suptitle(title)
+    final_title = PLOT_TITLE if PLOT_TITLE else title
+    if final_title:
+        fig.suptitle(final_title)
 
     fig.tight_layout()
     plt.show()
@@ -318,9 +378,9 @@ def load_and_preprocess_trial(
         t = t[smooth_window - 1 :]
 
     # Optional time clipping
-    if clip is not None:
-        t_start, t_end = clip
-        t, data_norm = clip_data(t, data_norm, t_start, t_end)
+    # if clip is not None:
+    #     t_start, t_end = clip
+    #     t, data_norm = clip_data(t, data_norm, t_start, t_end)
 
     return t, data_norm
 
@@ -486,14 +546,24 @@ def plot_multi_trials(
         for trial_idx, (t, data) in enumerate(trials, start=1):
             if channel not in data:
                 raise ValueError(f"Channel {channel} not found in trial data.")
-            ax.plot(t, data[channel], label=f"trial {trial_idx}", alpha=0.7)
+            
+            # Use palette color based on trial index (0-based for list)
+            color = COLOR_PALETTE[(trial_idx - 1) % len(COLOR_PALETTE)]
+            
+            label = f"trial {trial_idx}"
+            if LEGEND_LABELS and (trial_idx - 1) < len(LEGEND_LABELS):
+                label = LEGEND_LABELS[trial_idx - 1]
 
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel(f"{channel} (normalized)")
+            ax.plot(t, data[channel], label=label, alpha=0.7, color=color)
+
+        ax.set_xlabel(X_AXIS_LABEL if X_AXIS_LABEL else "Time [s]")
+        ax.set_ylabel(Y_AXIS_LABEL if Y_AXIS_LABEL else f"{channel} (normalized)")
         ax.grid(True, linestyle="--", alpha=0.3)
         ax.legend(loc="best", fontsize="small")
-        if title:
-            fig.suptitle(title)
+        
+        final_title = PLOT_TITLE if PLOT_TITLE else title
+        if final_title:
+            fig.suptitle(final_title)
         fig.tight_layout()
         plt.show()
         return
@@ -589,19 +659,23 @@ def plot_envelope(
     # Plot
     fig, ax = plt.subplots(1, 1, figsize=(10, 5))
 
+    # Use Flat UI Blue for consistency
+    color = '#3498DB'
+
     # Shaded envelope (min to max)
-    ax.fill_between(t_common, y_min, y_max, alpha=0.3, label="min/max range")
+    ax.fill_between(t_common, y_min, y_max, alpha=0.3, color=color, label="min/max range")
 
     # Average line
-    ax.plot(t_common, y_mean, linewidth=2, label=f"mean (n={len(trials)})")
+    ax.plot(t_common, y_mean, linewidth=2, color=color, label=f"mean (n={len(trials)})")
 
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel(f"{channel} (normalized)")
+    ax.set_xlabel(X_AXIS_LABEL if X_AXIS_LABEL else "Time [s]")
+    ax.set_ylabel(Y_AXIS_LABEL if Y_AXIS_LABEL else f"{channel} (normalized)")
     ax.grid(True, linestyle="--", alpha=0.3)
     ax.legend(loc="best")
 
-    if title:
-        fig.suptitle(title)
+    final_title = PLOT_TITLE if PLOT_TITLE else title
+    if final_title:
+        fig.suptitle(final_title)
 
     fig.tight_layout()
     plt.show()
@@ -622,12 +696,9 @@ def compute_batch_stats(
     if not trials:
         raise ValueError("No trials to process.")
 
-    # Find common time range (intersection of all trials)
-    t_min = max(min(t) for t, _ in trials)
-    t_max = min(max(t) for t, _ in trials)
-
-    if t_min >= t_max:
-        raise ValueError("Trials do not overlap in time.")
+    # Find common time range (union - full range)
+    t_min = min(min(t) for t, _ in trials)
+    t_max = max(max(t) for t, _ in trials)
 
     # Create common time axis
     t0, _ = trials[0]
@@ -670,21 +741,12 @@ def plot_multi_batch_envelope(
     """
     fig, ax = plt.subplots(1, 1, figsize=(12, 6))
 
-    # Distinct but less saturated colors (Flat UI palette)
-    colors = [
-        "#F73535",  # Red
-        '#3498DB',  # Blue
-        '#2ECC71',  # Green
-        "#F79235",  # Orange
-        '#9B59B6',  # Purple
-        '#1ABC9C',  # Cyan
-        '#E91E63',  # Magenta
-        "#FDD01D",  # Yellow
-    ]
-
     # Use order provided in arguments
     for idx, (label, t_common, y_mean, y_min, y_max) in enumerate(batch_data):
-        color = colors[idx % len(colors)]
+        color = COLOR_PALETTE[idx % len(COLOR_PALETTE)]
+
+        if LEGEND_LABELS and idx < len(LEGEND_LABELS):
+            label = LEGEND_LABELS[idx]
 
         # Shaded envelope
         if show_envelope:
@@ -693,13 +755,14 @@ def plot_multi_batch_envelope(
         # Average line
         ax.plot(t_common, y_mean, linewidth=2, label=label, color=color)
 
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel(f"{channel} (normalized)")
+    ax.set_xlabel(X_AXIS_LABEL if X_AXIS_LABEL else "Time [s]")
+    ax.set_ylabel(Y_AXIS_LABEL if Y_AXIS_LABEL else f"{channel} (normalized)")
     ax.grid(True, linestyle="--", alpha=0.3)
     ax.legend(loc="best")
 
-    if title:
-        fig.suptitle(title)
+    final_title = PLOT_TITLE if PLOT_TITLE else title
+    if final_title:
+        fig.suptitle(final_title)
 
     fig.tight_layout()
     plt.show()
@@ -817,15 +880,6 @@ def process_batch_dir(batch_dir: Path, args):
             print(f"Warning: Alignment failed for batch {batch_dir.name}: {e}")
             print("Proceeding without alignment.")
 
-    # Optional clip after alignment
-    if args.clip:
-        t_start, t_end = args.clip
-        clipped_trials: list[tuple[list[float], dict[str, list[float]]]] = []
-        for trial_t, trial_data in trials:
-            t_clipped, data_clipped = clip_data(trial_t, trial_data, t_start, t_end)
-            clipped_trials.append((t_clipped, data_clipped))
-        trials = clipped_trials
-
     # Optional clip around peak
     if args.peak:
         if args.channel is None:
@@ -855,15 +909,63 @@ def main():
         if args.channel is None:
             raise SystemExit("--compare requires --channel to specify which signal to plot.")
 
-        batch_data: list[tuple[str, list[float], list[float], list[float], list[float]]] = []
-
+        # 1. Load all batches
+        all_batches = []
         for batch_name in args.compare:
             batch_dir = resolve_batch_path(batch_name, data_root)
             trials = process_batch_dir(batch_dir, args)
+            if trials:
+                all_batches.append((batch_name, trials))
 
-            # Compute statistics for this batch
+        if not all_batches:
+            print("No data found for comparison.")
+            return
+
+        # 2. Normalize and Clip (if not using peak)
+        if not args.peak:
+            # Find global min time across all trials in all batches
+            global_min_t = min(
+                min(t[0] for t, _ in trials) 
+                for _, trials in all_batches 
+                if trials
+            )
+
+            # Shift and Clip
+            for i, (name, trials) in enumerate(all_batches):
+                shifted_trials = []
+                for j, (t, data) in enumerate(trials):
+                    # Shift
+                    new_t = [tv - global_min_t for tv in t]
+                    
+                    # Clip
+                    if args.clip:
+                        t_start, t_end = args.clip
+                        try:
+                            new_t, data = clip_data_preserve_time(new_t, data, t_start, t_end)
+                            shifted_trials.append((new_t, data))
+                        except ValueError:
+                            pass # Data out of range
+                    else:
+                        shifted_trials.append((new_t, data))
+                
+                all_batches[i] = (name, shifted_trials)
+
+        # 3. Compute Stats and Plot
+        batch_data: list[tuple[str, list[float], list[float], list[float], list[float]]] = []
+        for batch_name, trials in all_batches:
+            if not trials:
+                continue
             t_common, y_mean, y_min, y_max = compute_batch_stats(trials, args.channel)
             batch_data.append((batch_name, t_common, y_mean, y_min, y_max))
+
+        # Only normalize the x-axis if using --align, otherwise plot raw data
+        if args.align and batch_data:
+            global_min_t = min(item[1][0] for item in batch_data)
+            new_batch_data = []
+            for label, t, y_mean, y_min, y_max in batch_data:
+                t_shifted = t - global_min_t
+                new_batch_data.append((label, t_shifted, y_mean, y_min, y_max))
+            batch_data = new_batch_data
 
         plot_multi_batch_envelope(
             batch_data,
@@ -878,17 +980,56 @@ def main():
         batch_dir = resolve_batch_path(args.batch, data_root)
         aligned_trials = process_batch_dir(batch_dir, args)
 
+        # Normalize and Clip (if not using peak)
+        if not args.peak and aligned_trials:
+            min_t = min(t[0] for t, _ in aligned_trials)
+            shifted_trials = []
+            for t, data in aligned_trials:
+                # Shift
+                new_t = [tv - min_t for tv in t]
+                
+                # Clip
+                if args.clip:
+                    t_start, t_end = args.clip
+                    try:
+                        new_t, data = clip_data_preserve_time(new_t, data, t_start, t_end)
+                        shifted_trials.append((new_t, data))
+                    except ValueError:
+                        pass
+                else:
+                    shifted_trials.append((new_t, data))
+            aligned_trials = shifted_trials
+
         # Plot: envelope mode or overlay mode
         batch_label = args.batch  # Use the user-provided name as label
         if args.envelope:
             if args.channel is None:
                 raise SystemExit("--envelope requires --channel to specify which signal to plot.")
+            
+            # Normalize x-axis after processing
+            if aligned_trials:
+                min_t = min(t[0] for t, _ in aligned_trials)
+                normalized_trials = []
+                for t, data in aligned_trials:
+                    new_t = [tv - min_t for tv in t]
+                    normalized_trials.append((new_t, data))
+                aligned_trials = normalized_trials
+            
             plot_envelope(
                 aligned_trials,
                 channel=args.channel,
                 title=f"Batch: {batch_label} (n={len(aligned_trials)} trials)",
             )
         else:
+            # Normalize x-axis after processing
+            if aligned_trials:
+                min_t = min(t[0] for t, _ in aligned_trials)
+                normalized_trials = []
+                for t, data in aligned_trials:
+                    new_t = [tv - min_t for tv in t]
+                    normalized_trials.append((new_t, data))
+                aligned_trials = normalized_trials
+            
             plot_multi_trials(
                 aligned_trials,
                 title=f"Batch: {batch_label} (n={len(aligned_trials)} trials)",
@@ -909,6 +1050,9 @@ def main():
     if not path.is_file():
         raise SystemExit(f"CSV file not found: {path}")
 
+    # Pass clip=None here so we can handle it manually if needed, 
+    # but for single trial mode, the original logic is fine.
+    # Actually, let's keep original logic for single trial as it doesn't use align/peak in the same way.
     t, data = load_bota_csv(path)
     data_norm = normalize_to_zero(data)
 
@@ -919,8 +1063,12 @@ def main():
     # Apply smoothing if requested
     if args.smooth > 1:
         data_norm = smooth_data(data_norm, args.smooth)
-        # Truncate time array to match smoothed data length
-        # (convolution with mode='valid' shortens output by window-1)
+        t = t[args.smooth - 1 :]
+
+    # Apply clip if requested
+    if args.clip:
+        t_start, t_end = args.clip
+        t, data_norm = clip_data(t, data_norm, t_start, t_end)
         t = t[args.smooth - 1:]
 
     # Apply time clipping if requested
