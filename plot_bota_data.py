@@ -8,20 +8,26 @@ USAGE MODES:
 
 2. Multi-trial overlay mode (overlay trials from one batch directory):
         python plot_bota_data.py --batch "0 degrees" --channel Fz [options]
+        # Or with a data root directory:
+        python plot_bota_data.py ./data_root --batch "0 degrees" --channel Fz [options]
 
 3. Multi-batch comparison mode (compare averages across multiple configurations):
-        python plot_bota_data.py --compare "0 degrees" "30 degrees" "-30 degrees" --channel Fz [options]
+        python plot_bota_data.py --compare "0 degrees" "30 degrees" --channel Fz [options]
+        # Or with a data root directory:
+        python plot_bota_data.py ./data_root --compare "0 degrees" "30 degrees" --channel Fz [options]
 
 PARAMETERS:
 ===========
 
 Positional:
-        csv_file                Path to a single CSV file (single-trial mode only).
+        csv_file                Path to a single CSV file (single-trial mode) OR
+                                Path to a root directory containing batch folders (multi-trial mode).
 
 Mode Selection:
         --batch DIR             Directory containing multiple CSV trials to overlay.
         --compare DIR [DIR ...] Compare multiple batch directories on one plot.
                                 Shows average (and optional envelope) for each batch.
+                                Must provide exact folder names relative to the data root.
 
 Channel Selection:
         --channel NAME          Plot only one channel: Fx, Fy, Fz, Mx, My, or Mz.
@@ -55,14 +61,8 @@ python plot_bota_data.py "0 degrees/bota_readings_2025-12-10_16-56-36.csv"
 # Overlay 5 trials from one batch, aligned by Fz onset:
 python plot_bota_data.py --batch "0 degrees" --channel Fz --align
 
-# Same, but show average with min/max envelope:
-python plot_bota_data.py --batch "0 degrees" --channel Fz --align --envelope
-
-# Clip around peak, flip values, smooth:
-python plot_bota_data.py --batch "0 degrees" --channel Fz --align --flip --peak 1 1 --smooth 10
-
-# Compare 5 angle configurations on one plot:
-python plot_bota_data.py --compare "0 degrees" "30 degrees" "-30 degrees" "60 degrees" "-60 degrees" \\
+# Compare multiple folders, specifying the root data directory:
+python plot_bota_data.py ./aristo-pip-test/bota --compare "neg-60" "neg-30" "0-deg" "plus-30" "plus-60" \\
         --channel Fz --align --flip --peak 1 1 --envelope
 
 TUNABLE CONSTANTS (edit in code):
@@ -84,7 +84,26 @@ TORQUE_COLUMNS = ["Mx", "My", "Mz"]
 
 # Alignment onset detection thresholds (adjust these for noisy data)
 ONSET_NOISE_MULTIPLIER = 17.0  # Derivative must exceed this × noise floor
-ONSET_MIN_FRACTION = 0.3       # Or this fraction of max derivative, whichever is larger
+ONSET_MIN_FRACTION = 0.3    # Or this fraction of max derivative, whichever is larger
+
+
+def resolve_batch_path(name: str, data_dir: Path | None = None) -> Path:
+    """Resolve batch name to a directory path."""
+    # Locations to check
+    locations = []
+    if data_dir:
+        locations.append(data_dir)
+    
+    # Also check CWD and Script Directory as fallbacks
+    locations.append(Path("."))
+    locations.append(Path(__file__).parent)
+
+    for loc in locations:
+        target = loc / name
+        if target.is_dir():
+            return target
+
+    raise SystemExit(f"Directory not found for '{name}'. Checked in {[str(l) for l in locations]}")
 
 
 def load_bota_csv(path: Path):
@@ -444,14 +463,7 @@ def align_trials_by_derivative_peak(
         shifted_t = [ti - t_onset for ti in trial_t]
         shifted_trials.append((shifted_t, trial_data))
 
-    # Now normalize so the earliest time across all trials is 0
-    min_time = min(min(t) for t, _ in shifted_trials)
-    normalized_trials: list[tuple[list[float], dict[str, list[float]]]] = []
-    for trial_t, trial_data in shifted_trials:
-        normalized_t = [ti - min_time for ti in trial_t]
-        normalized_trials.append((normalized_t, trial_data))
-
-    return normalized_trials
+    return shifted_trials
 
 
 def plot_multi_trials(
@@ -658,15 +670,25 @@ def plot_multi_batch_envelope(
     """
     fig, ax = plt.subplots(1, 1, figsize=(12, 6))
 
-    # Use a colormap for distinct colors
-    colors = plt.cm.tab10.colors
+    # Distinct but less saturated colors (Flat UI palette)
+    colors = [
+        "#F73535",  # Red
+        '#3498DB',  # Blue
+        '#2ECC71',  # Green
+        "#F79235",  # Orange
+        '#9B59B6',  # Purple
+        '#1ABC9C',  # Cyan
+        '#E91E63',  # Magenta
+        "#FDD01D",  # Yellow
+    ]
 
+    # Use order provided in arguments
     for idx, (label, t_common, y_mean, y_min, y_max) in enumerate(batch_data):
         color = colors[idx % len(colors)]
 
         # Shaded envelope
         if show_envelope:
-            ax.fill_between(t_common, y_min, y_max, alpha=0.2, color=color)
+            ax.fill_between(t_common, y_min, y_max, alpha=0.25, color=color)
 
         # Average line
         ax.plot(t_common, y_mean, linewidth=2, label=label, color=color)
@@ -688,8 +710,7 @@ def _parse_args():
     parser.add_argument(
         "csv_file",
         nargs="?",
-        help="Path to CSV file produced by Bota-Rokubi-Logger.py (single-trial mode). "
-             "Omit this and use --angle-dir for multi-trial overlay mode.",
+        help="Path to CSV file (single-trial) OR root directory containing batches (multi-trial).",
     )
     parser.add_argument(
         "--batch",
@@ -744,7 +765,7 @@ def _parse_args():
         nargs="+",
         type=str,
         metavar="DIR",
-        help="Compare multiple batch directories on one plot (e.g., --compare '0 degrees' '30 degrees' '-30 degrees').",
+        help="Compare multiple batch directories on one plot (e.g., --compare '0-deg' '30-deg').",
     )
     parser.add_argument(
         "--max-trials",
@@ -790,7 +811,11 @@ def process_batch_dir(batch_dir: Path, args):
     if args.align:
         if args.channel is None:
             raise SystemExit("--align requires --channel to specify which signal to use.")
-        trials = align_trials_by_derivative_peak(trials, channel=args.channel)
+        try:
+            trials = align_trials_by_derivative_peak(trials, channel=args.channel)
+        except ValueError as e:
+            print(f"Warning: Alignment failed for batch {batch_dir.name}: {e}")
+            print("Proceeding without alignment.")
 
     # Optional clip after alignment
     if args.clip:
@@ -820,6 +845,11 @@ def process_batch_dir(batch_dir: Path, args):
 def main():
     args = _parse_args()
 
+    # Determine data root if positional arg is a directory
+    data_root = None
+    if args.csv_file and Path(args.csv_file).is_dir():
+        data_root = Path(args.csv_file)
+
     # Multi-batch comparison mode
     if args.compare:
         if args.channel is None:
@@ -828,12 +858,12 @@ def main():
         batch_data: list[tuple[str, list[float], list[float], list[float], list[float]]] = []
 
         for batch_name in args.compare:
-            batch_dir = Path(batch_name)
+            batch_dir = resolve_batch_path(batch_name, data_root)
             trials = process_batch_dir(batch_dir, args)
 
             # Compute statistics for this batch
             t_common, y_mean, y_min, y_max = compute_batch_stats(trials, args.channel)
-            batch_data.append((batch_dir.name, t_common, y_mean, y_min, y_max))
+            batch_data.append((batch_name, t_common, y_mean, y_min, y_max))
 
         plot_multi_batch_envelope(
             batch_data,
@@ -845,11 +875,11 @@ def main():
 
     # Single-batch multi-trial mode
     if args.batch:
-        batch_dir = Path(args.batch)
+        batch_dir = resolve_batch_path(args.batch, data_root)
         aligned_trials = process_batch_dir(batch_dir, args)
 
         # Plot: envelope mode or overlay mode
-        batch_label = batch_dir.name
+        batch_label = args.batch  # Use the user-provided name as label
         if args.envelope:
             if args.channel is None:
                 raise SystemExit("--envelope requires --channel to specify which signal to plot.")
@@ -874,6 +904,8 @@ def main():
         )
 
     path = Path(args.csv_file)
+    if path.is_dir():
+        raise SystemExit(f"'{path}' is a directory. Use --batch or --compare to plot data from it.")
     if not path.is_file():
         raise SystemExit(f"CSV file not found: {path}")
 
