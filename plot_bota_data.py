@@ -31,11 +31,10 @@ Mode Selection:
 
 Channel Selection:
         --channel NAME          Plot only one channel: Fx, Fy, Fz, Mx, My, or Mz.
-                                Required for --align, --peak, --envelope, --compare.
+                                Required for --peak, --envelope, --compare.
+                                In --batch and --compare modes, trials are automatically aligned by onset.
 
-Alignment & Clipping:
-        --align                 Align trials by onset of movement (when signal starts changing).
-                                Uses derivative threshold detection. Requires --channel.
+Clipping:
         --clip START END        Clip to absolute time range [START, END] seconds.
                                 Time resets to 0 at the clip start.
         --peak BEFORE AFTER     Clip around the peak value of the channel.
@@ -58,18 +57,19 @@ EXAMPLES:
 # Plot single file with all channels:
 python plot_bota_data.py "0 degrees/bota_readings_2025-12-10_16-56-36.csv"
 
-# Overlay 5 trials from one batch, aligned by Fz onset:
-python plot_bota_data.py --batch "0 degrees" --channel Fz --align
+# Overlay 5 trials from one batch (automatically aligned by onset):
+python plot_bota_data.py --batch "0 degrees" --channel Fz
 
 # Compare multiple folders, specifying the root data directory:
 python plot_bota_data.py ./aristo-pip-test/bota --compare "neg-60" "neg-30" "0-deg" "plus-30" "plus-60" \\
-        --channel Fz --align --flip --peak 1 1 --envelope
+        --channel Fz --flip --peak 1 1 --envelope
 
 TUNABLE CONSTANTS (edit in code):
 =================================
         ONSET_NOISE_MULTIPLIER  Threshold multiplier for onset detection (default: 17.0)
         ONSET_MIN_FRACTION      Minimum fraction of max derivative for onset (default: 0.3)
 """
+# python plot_bota_data.py .\aristo-pip-test --compare neg-60 neg-30 0-deg plus-30 plus-60 --channel Fz --flip --peak 1 1
 
 import argparse
 import csv
@@ -710,17 +710,28 @@ def compute_batch_stats(
     t_common = np.linspace(t_min, t_max, num_points)
 
     # Interpolate each trial onto common time axis
+    # Use NaN for regions outside each trial's actual data range
     interpolated = []
     for trial_t, trial_data in trials:
         if channel not in trial_data:
             raise ValueError(f"Channel {channel} not found in trial data.")
-        y_interp = np.interp(t_common, trial_t, trial_data[channel])
+        
+        # Create array filled with NaN
+        y_interp = np.full_like(t_common, np.nan, dtype=float)
+        
+        # Only interpolate within the trial's actual time range
+        trial_t_min = min(trial_t)
+        trial_t_max = max(trial_t)
+        mask = (t_common >= trial_t_min) & (t_common <= trial_t_max)
+        
+        y_interp[mask] = np.interp(t_common[mask], trial_t, trial_data[channel])
         interpolated.append(y_interp)
 
     stacked = np.array(interpolated)
-    y_mean = np.mean(stacked, axis=0)
-    y_min = np.min(stacked, axis=0)
-    y_max = np.max(stacked, axis=0)
+    # Use nanmean/nanmin/nanmax to ignore NaN values in statistics
+    y_mean = np.nanmean(stacked, axis=0)
+    y_min = np.nanmin(stacked, axis=0)
+    y_max = np.nanmax(stacked, axis=0)
 
     return t_common, y_mean, y_min, y_max
 
@@ -809,11 +820,6 @@ def _parse_args():
         help="Only plot a single channel (e.g., Fx, Fy, Fz, Mx, My, Mz) in multi-trial mode.",
     )
     parser.add_argument(
-        "--align",
-        action="store_true",
-        help="In multi-trial mode, align trials by peak derivative of the chosen channel.",
-    )
-    parser.add_argument(
         "--flip",
         action="store_true",
         help="Flip the Y-axis values (negate all data: positive becomes negative and vice versa).",
@@ -870,15 +876,14 @@ def process_batch_dir(batch_dir: Path, args):
             data_norm = flip_data(data_norm)
         trials.append((t, data_norm))
 
-    # Align by derivative peak if requested
-    if args.align:
-        if args.channel is None:
-            raise SystemExit("--align requires --channel to specify which signal to use.")
-        try:
-            trials = align_trials_by_derivative_peak(trials, channel=args.channel)
-        except ValueError as e:
-            print(f"Warning: Alignment failed for batch {batch_dir.name}: {e}")
-            print("Proceeding without alignment.")
+    # Always align trials in batch/compare mode
+    if args.channel is None:
+        raise SystemExit("Batch and compare modes require --channel to specify which signal to use for alignment.")
+    try:
+        trials = align_trials_by_derivative_peak(trials, channel=args.channel)
+    except ValueError as e:
+        print(f"Warning: Alignment failed for batch {batch_dir.name}: {e}")
+        print("Proceeding without alignment.")
 
     # Optional clip around peak
     if args.peak:
@@ -958,8 +963,8 @@ def main():
             t_common, y_mean, y_min, y_max = compute_batch_stats(trials, args.channel)
             batch_data.append((batch_name, t_common, y_mean, y_min, y_max))
 
-        # Only normalize the x-axis if using --align, otherwise plot raw data
-        if args.align and batch_data:
+        # Normalize the x-axis so the earliest point is at 0 (trials are already aligned)
+        if batch_data:
             global_min_t = min(item[1][0] for item in batch_data)
             new_batch_data = []
             for label, t, y_mean, y_min, y_max in batch_data:
